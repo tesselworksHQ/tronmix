@@ -56,10 +56,45 @@ Tested 2026-11-09 on Windows 11, Deno 2, mainnet, with direct access denied: `in
 - forwards only to the configured API host (the path is appended to it; you can't pick another host)
 - strips `cookie`, `user-agent`, `origin`, `referer`, `x-forwarded-for` before the request leaves
 
+## Use your own node
+
+With the default host, TronGrid no longer sees your IP, but it still logs *which* addresses and txids are asked
+about. To remove that third party, run a [java-tron](https://github.com/tronprotocol/java-tron) FullNode yourself.
+
+**A. Node on a server (VPS or home server), queried over the mixnet.** Nobody else logs your lookups, and the
+server only ever sees a Nym exit, so a compromised box or its hosting provider still can't tie the lookups to the
+IP you browse from.
+
+1. Run a java-tron FullNode (mainnet needs a full sync or a snapshot, and a lot of disk). Its HTTP API listens on
+   port 8090 by default.
+2. Put it behind HTTPS on port 443 (Caddy or nginx with a certificate for e.g. `tron.example.org`). Nym exit
+   gateways apply an exit policy, and standard HTTPS is the safe choice. Don't expose port 8090 itself.
+3. Point tronmix at it, and deny direct access to that host as well, so the sandbox check still proves that
+   nothing leaves outside the mixnet:
+
+```sh
+TRONMIX_API=https://tron.example.org \
+  deno run -A --node-modules-dir=none --deny-net=tron.example.org,api.trongrid.io tronmix.ts proxy 8090
+```
+
+A plain FullNode serves the `/wallet/*` API (`info`, `resources`, `tx`, `broadcast` and TronWeb's calls).
+The `/v1/*` endpoints, which `balance` uses, are TronGrid's own indexer and **don't exist on java-tron**. With your
+own node, read TRX balances with `POST /wallet/getaccount` and TRC-20 balances (USDT) with
+`/wallet/triggerconstantcontract` calling `balanceOf`, which is what TronWeb's `contract().balanceOf()` does.
+
+**B. Node on the same machine as the wallet.** Reads are local (`http://127.0.0.1:8090`), so you don't need the
+mixnet for them. Broadcasts are a different story: a transaction your node relays first is gossiped from *your*
+node's IP. To keep the "who paid" link off the network, read from the local node and send the signed transaction
+through tronmix with the default host:
+
+```sh
+deno run -A --node-modules-dir=none --deny-net=api.trongrid.io tronmix.ts broadcast @signed-tx.json
+```
+
 ## Limits
 
-- The API provider still sees *what* you ask about (addresses, txids). It just can't tie it to your IP. For full
-  privacy, run your own node and point `TRONMIX_API` at it over the mixnet.
+- With the default host, the API provider still sees *what* you ask about (addresses, txids). It just can't tie
+  that to your IP. See [Use your own node](#use-your-own-node) to remove the provider.
 - Speed: mixnet latency plus cover traffic. Fine for wallet use, slow for indexing.
 - Deno shims (forced module Worker, in-worker `fake-indexeddb`) work around mix-fetch v3 targeting browsers.
 
